@@ -29,7 +29,8 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     -i https://pypi.tuna.tsinghua.edu.cn/simple/ \
-    --trusted-host pypi.tuna.tsinghua.edu.cn
+    --trusted-host pypi.tuna.tsinghua.edu.cn \
+    --extra-index-url https://pypi.org/simple
 
 # 设置 Playwright 下载镜像（使用 npmmirror）
 ENV PLAYWRIGHT_DOWNLOAD_HOST=https://registry.npmmirror.com/-/binary/playwright
