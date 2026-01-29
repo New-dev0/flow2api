@@ -172,8 +172,8 @@ class Database:
         count = await cursor.fetchone()
         if count[0] == 0:
             await db.execute("""
-                INSERT INTO plugin_config (id, connection_token)
-                VALUES (1, '')
+                INSERT INTO plugin_config (id, connection_token, auto_enable_on_update)
+                VALUES (1, '', 1)
             """)
 
     async def check_and_migrate_db(self, config_dict: dict = None):
@@ -223,7 +223,7 @@ class Database:
                         capsolver_api_key TEXT DEFAULT '',
                         capsolver_base_url TEXT DEFAULT 'https://api.capsolver.com',
                         website_key TEXT DEFAULT '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV',
-                        page_action TEXT DEFAULT 'FLOW_GENERATION',
+                        page_action TEXT DEFAULT 'IMAGE_GENERATION',
                         browser_proxy_enabled BOOLEAN DEFAULT 0,
                         browser_proxy_url TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -238,6 +238,7 @@ class Database:
                     CREATE TABLE plugin_config (
                         id INTEGER PRIMARY KEY DEFAULT 1,
                         connection_token TEXT DEFAULT '',
+                        auto_enable_on_update BOOLEAN DEFAULT 1,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
@@ -509,9 +510,11 @@ class Database:
                     capsolver_api_key TEXT DEFAULT '',
                     capsolver_base_url TEXT DEFAULT 'https://api.capsolver.com',
                     website_key TEXT DEFAULT '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV',
-                    page_action TEXT DEFAULT 'FLOW_GENERATION',
+                    page_action TEXT DEFAULT 'IMAGE_GENERATION',
+
                     browser_proxy_enabled BOOLEAN DEFAULT 0,
                     browser_proxy_url TEXT,
+                    browser_count INTEGER DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -522,6 +525,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS plugin_config (
                     id INTEGER PRIMARY KEY DEFAULT 1,
                     connection_token TEXT DEFAULT '',
+                    auto_enable_on_update BOOLEAN DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -1098,6 +1102,12 @@ class Database:
             config.set_captcha_method(captcha_config.captcha_method)
             config.set_yescaptcha_api_key(captcha_config.yescaptcha_api_key)
             config.set_yescaptcha_base_url(captcha_config.yescaptcha_base_url)
+            config.set_capmonster_api_key(captcha_config.capmonster_api_key)
+            config.set_capmonster_base_url(captcha_config.capmonster_base_url)
+            config.set_ezcaptcha_api_key(captcha_config.ezcaptcha_api_key)
+            config.set_ezcaptcha_base_url(captcha_config.ezcaptcha_base_url)
+            config.set_capsolver_api_key(captcha_config.capsolver_api_key)
+            config.set_capsolver_base_url(captcha_config.capsolver_base_url)
 
     # Cache config operations
     async def get_cache_config(self) -> CacheConfig:
