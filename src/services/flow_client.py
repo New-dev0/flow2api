@@ -972,6 +972,101 @@ class FlowClient:
         # 所有重试都失败
         raise last_error
 
+    async def generate_video_extend(
+        self,
+        at: str,
+        project_id: str,
+        video_media_id: str,
+        prompt: str,
+        start_frame_index: int,
+        end_frame_index: int,
+        aspect_ratio: str,
+        model_key: str = "veo_3_1_extend_fast_portrait_ultra",
+        user_paygate_tier: str = "PAYGATE_TIER_ONE"
+    ) -> dict:
+        """视频延长/扩展,返回task_id
+
+        Args:
+            at: Access Token
+            project_id: 项目ID
+            video_media_id: 要扩展的视频mediaId
+            prompt: 延长提示词 (如 "continue what he was speaking")
+            start_frame_index: 起始帧索引
+            end_frame_index: 结束帧索引
+            aspect_ratio: 视频宽高比
+            model_key: veo_3_1_extend_fast_portrait_ultra 或 veo_3_1_extend_fast_landscape_ultra
+            user_paygate_tier: 用户等级
+
+        Returns:
+            同 generate_video_text
+        """
+        url = f"{self.api_base_url}/video:batchAsyncGenerateVideoExtendVideo"
+
+        # 403/reCAPTCHA 重试逻辑 - 最多重试3次
+        max_retries = 3
+        last_error = None
+
+        for retry_attempt in range(max_retries):
+            # 每次重试都重新获取 reCAPTCHA token - 视频使用 VIDEO_GENERATION action
+            recaptcha_token, browser_id = await self._get_recaptcha_token(project_id, action="VIDEO_GENERATION")
+            if not recaptcha_token:
+                raise Exception("Failed to obtain reCAPTCHA token")
+            session_id = self._generate_session_id()
+            scene_id = str(uuid.uuid4())
+
+            json_data = {
+                "clientContext": {
+                    "recaptchaContext": {
+                        "token": recaptcha_token,
+                        "applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB"
+                    },
+                    "sessionId": session_id,
+                    "projectId": project_id,
+                    "tool": "PINHOLE",
+                    "userPaygateTier": user_paygate_tier
+                },
+                "requests": [{
+                    "textInput": {
+                        "prompt": prompt
+                    },
+                    "videoInput": {
+                        "mediaId": video_media_id,
+                        "startFrameIndex": start_frame_index,
+                        "endFrameIndex": end_frame_index
+                    },
+                    "videoModelKey": model_key,
+                    "aspectRatio": aspect_ratio,
+                    "seed": random.randint(1, 99999),
+                    "metadata": {
+                        "sceneId": scene_id
+                    }
+                }]
+            }
+
+            try:
+                result = await self._make_request(
+                    method="POST",
+                    url=url,
+                    json_data=json_data,
+                    use_at=True,
+                    at_token=at
+                )
+                return result
+            except Exception as e:
+                error_str = str(e)
+                last_error = e
+                retry_reason = self._get_retry_reason(error_str)
+                if retry_reason and retry_attempt < max_retries - 1:
+                    debug_logger.log_warning(f"[VIDEO EXTEND] 延长遇到{retry_reason}，正在重新获取验证码重试 ({retry_attempt + 2}/{max_retries})...")
+                    await self._notify_browser_captcha_error(browser_id)
+                    await asyncio.sleep(1)
+                    continue
+                else:
+                    raise e
+
+        # 所有重试都失败
+        raise last_error
+
     # ========== 视频放大 (Video Upsampler) ==========
 
     async def upsample_video(

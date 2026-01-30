@@ -572,6 +572,46 @@ MODEL_CONFIG = {
         "min_images": 0,
         "max_images": None,
         "upsample": {"resolution": "VIDEO_RESOLUTION_1080P", "model_key": "veo_3_1_upsampler_1080p"}
+    },
+
+    # ========== 视频延长/扩展 (Extend) ==========
+    # 从现有视频的最后几帧继续生成，延长视频长度
+    # 需要提供 video_media_id, start_frame_index, end_frame_index
+
+    # Extend Portrait (竖屏延长)
+    "veo_3_1_extend_fast_portrait": {
+        "type": "video",
+        "video_type": "extend",
+        "model_key": "veo_3_1_extend_fast_portrait",
+        "aspect_ratio": "VIDEO_ASPECT_RATIO_PORTRAIT",
+        "supports_images": False,
+        "requires_video_id": True
+    },
+    "veo_3_1_extend_fast_portrait_ultra": {
+        "type": "video",
+        "video_type": "extend",
+        "model_key": "veo_3_1_extend_fast_portrait_ultra",
+        "aspect_ratio": "VIDEO_ASPECT_RATIO_PORTRAIT",
+        "supports_images": False,
+        "requires_video_id": True
+    },
+
+    # Extend Landscape (横屏延长)
+    "veo_3_1_extend_fast_landscape": {
+        "type": "video",
+        "video_type": "extend",
+        "model_key": "veo_3_1_extend_fast_landscape",
+        "aspect_ratio": "VIDEO_ASPECT_RATIO_LANDSCAPE",
+        "supports_images": False,
+        "requires_video_id": True
+    },
+    "veo_3_1_extend_fast_landscape_ultra": {
+        "type": "video",
+        "video_type": "extend",
+        "model_key": "veo_3_1_extend_fast_landscape_ultra",
+        "aspect_ratio": "VIDEO_ASPECT_RATIO_LANDSCAPE",
+        "supports_images": False,
+        "requires_video_id": True
     }
 }
 
@@ -877,14 +917,16 @@ class GenerationHandler:
                                     local_url = f"{self._get_base_url()}/tmp/{cached_filename}"
                                     if stream:
                                         yield self._create_stream_chunk(f"✅ {resolution_name} 图片缓存成功\n")
+                                        media_id_info = f"\n<!-- media_id:{media_id} -->" if media_id else ""
                                         yield self._create_stream_chunk(
-                                            f"![Generated Image]({local_url})",
+                                            f"![Generated Image]({local_url}){media_id_info}",
                                             finish_reason="stop"
                                         )
                                     else:
                                         yield self._create_completion_response(
                                             local_url,
-                                            media_type="image"
+                                            media_type="image",
+                                            media_id=media_id
                                         )
                                     return
                                 except Exception as e:
@@ -895,14 +937,16 @@ class GenerationHandler:
                             # 缓存未启用或缓存失败，返回 base64 格式
                             base64_url = f"data:image/jpeg;base64,{encoded_image}"
                             if stream:
+                                media_id_info = f"\n<!-- media_id:{media_id} -->" if media_id else ""
                                 yield self._create_stream_chunk(
-                                    f"![Generated Image]({base64_url})",
+                                    f"![Generated Image]({base64_url}){media_id_info}",
                                     finish_reason="stop"
                                 )
                             else:
                                 yield self._create_completion_response(
                                     base64_url,
-                                    media_type="image"
+                                    media_type="image",
+                                    media_id=media_id
                                 )
                             return
                         else:
@@ -953,14 +997,17 @@ class GenerationHandler:
             self._last_generated_url = local_url
 
             if stream:
+                # Stream response with media_id
+                media_id_info = f"\n<!-- media_id:{media_id} -->" if media_id else ""
                 yield self._create_stream_chunk(
-                    f"![Generated Image]({local_url})",
+                    f"![Generated Image]({local_url}){media_id_info}",
                     finish_reason="stop"
                 )
             else:
                 yield self._create_completion_response(
                     local_url,  # 直接传URL,让方法内部格式化
-                    media_type="image"
+                    media_type="image",
+                    media_id=media_id
                 )
 
         finally:
@@ -1148,6 +1195,45 @@ class GenerationHandler:
                     user_paygate_tier=token.user_paygate_tier or "PAYGATE_TIER_ONE"
                 )
 
+            # Extend: 视频延长
+            elif video_type == "extend":
+                # 从 prompt 中提取 video_media_id 和帧索引
+                # 格式: "继续视频内容 [video_id:MEDIA_ID,start_frame:168,end_frame:191]"
+                # 或通过单独的参数传递
+                import re
+                video_id_match = re.search(r'video_id:(\S+)', prompt)
+                start_frame_match = re.search(r'start_frame:(\d+)', prompt)
+                end_frame_match = re.search(r'end_frame:(\d+)', prompt)
+
+                if not (video_id_match and start_frame_match and end_frame_match):
+                    error_msg = "❌ Extend模型需要提供 video_id, start_frame, end_frame 参数"
+                    if stream:
+                        yield self._create_stream_chunk(f"{error_msg}\n")
+                    yield self._create_error_response(error_msg)
+                    return
+
+                video_media_id = video_id_match.group(1)
+                start_frame = int(start_frame_match.group(1))
+                end_frame = int(end_frame_match.group(1))
+
+                # 清理 prompt 中的参数标记
+                clean_prompt = re.sub(r'\[video_id:.*?\]', '', prompt).strip()
+
+                if stream:
+                    yield self._create_stream_chunk(f"延长视频 {video_media_id} (帧 {start_frame}-{end_frame})...\n")
+
+                result = await self.flow_client.generate_video_extend(
+                    at=token.at,
+                    project_id=project_id,
+                    video_media_id=video_media_id,
+                    prompt=clean_prompt,
+                    start_frame_index=start_frame,
+                    end_frame_index=end_frame,
+                    aspect_ratio=model_config["aspect_ratio"],
+                    model_key=model_config["model_key"],
+                    user_paygate_tier=token.user_paygate_tier or "PAYGATE_TIER_ONE"
+                )
+
             # T2V 或 R2V无图: 纯文本生成
             else:
                 result = await self.flow_client.generate_video_text(
@@ -1319,14 +1405,17 @@ class GenerationHandler:
 
                     # 返回结果
                     if stream:
+                        # Stream response with media_id
+                        media_id_info = f"\n<!-- media_id:{video_media_id} -->" if video_media_id else ""
                         yield self._create_stream_chunk(
-                            f"<video src='{local_url}' controls style='max-width:100%'></video>",
+                            f"<video src='{local_url}' controls style='max-width:100%'></video>{media_id_info}",
                             finish_reason="stop"
                         )
                     else:
                         yield self._create_completion_response(
                             local_url,  # 直接传URL,让方法内部格式化
-                            media_type="video"
+                            media_type="video",
+                            media_id=video_media_id
                         )
                     return
 
@@ -1393,13 +1482,14 @@ class GenerationHandler:
 
         return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
-    def _create_completion_response(self, content: str, media_type: str = "image", is_availability_check: bool = False) -> str:
+    def _create_completion_response(self, content: str, media_type: str = "image", is_availability_check: bool = False, media_id: str = None) -> str:
         """创建非流式响应
 
         Args:
             content: 媒体URL或纯文本消息
             media_type: 媒体类型 ("image" 或 "video")
             is_availability_check: 是否为可用性检查响应 (纯文本消息)
+            media_id: 媒体ID (用于视频扩展等操作)
 
         Returns:
             JSON格式的响应
@@ -1414,6 +1504,9 @@ class GenerationHandler:
             # 媒体生成: 根据媒体类型格式化内容为Markdown
             if media_type == "video":
                 formatted_content = f"```html\n<video src='{content}' controls></video>\n```"
+                # 如果有media_id，添加到内容中
+                if media_id:
+                    formatted_content += f"\n\n**Media ID:** `{media_id}`\n\n_Use this ID for video extension with extend models_"
             else:  # image
                 formatted_content = f"![Generated Image]({content})"
 
@@ -1431,6 +1524,10 @@ class GenerationHandler:
                 "finish_reason": "stop"
             }]
         }
+
+        # 添加 media_id 作为额外元数据
+        if media_id:
+            response["media_id"] = media_id
 
         return json.dumps(response, ensure_ascii=False)
 
