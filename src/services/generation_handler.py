@@ -1201,7 +1201,7 @@ class GenerationHandler:
                 # 格式: "继续视频内容 [video_id:MEDIA_ID,start_frame:168,end_frame:191]"
                 # 或通过单独的参数传递
                 import re
-                video_id_match = re.search(r'video_id:(\S+)', prompt)
+                video_id_match = re.search(r'video_id:([^,\]]+)', prompt)
                 start_frame_match = re.search(r'start_frame:(\d+)', prompt)
                 end_frame_match = re.search(r'end_frame:(\d+)', prompt)
 
