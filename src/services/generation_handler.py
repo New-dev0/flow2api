@@ -652,7 +652,8 @@ class GenerationHandler:
         model: str,
         prompt: str,
         images: Optional[List[bytes]] = None,
-        stream: bool = False
+        stream: bool = False,
+        user_tier_override: Optional[str] = None
     ) -> AsyncGenerator:
         """统一生成入口
 
@@ -661,6 +662,7 @@ class GenerationHandler:
             prompt: 提示词
             images: 图片列表 (bytes格式)
             stream: 是否流式输出
+            user_tier_override: 覆盖用户tier (PAYGATE_TIER_ONE, PAYGATE_TIER_TWO, PAYGATE_TIER_NOT_PAID)
         """
         start_time = time.time()
         token = None
@@ -754,7 +756,8 @@ class GenerationHandler:
             else:  # video
                 debug_logger.log_info(f"[GENERATION] 开始视频生成流程...")
                 async for chunk in self._handle_video_generation(
-                    token, project_id, model_config, prompt, images, stream
+                    token, project_id, model_config, prompt, images, stream,
+                    user_tier_override=user_tier_override
                 ):
                     yield chunk
 
@@ -1022,9 +1025,14 @@ class GenerationHandler:
         model_config: dict,
         prompt: str,
         images: Optional[List[bytes]],
-        stream: bool
+        stream: bool,
+        user_tier_override: Optional[str] = None
     ) -> AsyncGenerator:
-        """处理视频生成 (异步轮询)"""
+        """处理视频生成 (异步轮询)
+        
+        Args:
+            user_tier_override: 覆盖用户tier，同时禁用自动模型调整
+        """
 
         # 获取并发槽位
         if self.concurrency_manager:
@@ -1039,40 +1047,48 @@ class GenerationHandler:
             min_images = model_config.get("min_images", 0)
             max_images = model_config.get("max_images", 0)
 
-            # 根据账号tier自动调整模型 key
+            # 根据账号tier自动调整模型 key (除非有override)
             model_key = model_config["model_key"]
-            user_tier = token.user_paygate_tier or "PAYGATE_TIER_ONE"
+            
+            # 如果提供了tier override，使用override值并跳过自动模型调整
+            if user_tier_override:
+                user_tier = user_tier_override
+                if stream:
+                    yield self._create_stream_chunk(f"使用覆盖的用户tier: {user_tier}，跳过自动模型调整\n")
+                debug_logger.log_info(f"[VIDEO] 使用覆盖的tier: {user_tier}，原始模型: {model_key}")
+            else:
+                user_tier = token.user_paygate_tier or "PAYGATE_TIER_ONE"
+                
+                # TIER_TWO 账号需要使用 ultra 版本的模型
+                if user_tier == "PAYGATE_TIER_TWO":
+                    # 如果模型 key 不包含 ultra，自动添加
+                    if "ultra" not in model_key:
+                        # veo_3_1_i2v_s_fast_fl -> veo_3_1_i2v_s_fast_ultra_fl
+                        # veo_3_1_i2v_s_fast_portrait_fl -> veo_3_1_i2v_s_fast_portrait_ultra_fl
+                        # veo_3_1_t2v_fast -> veo_3_1_t2v_fast_ultra
+                        # veo_3_1_t2v_fast_portrait -> veo_3_1_t2v_fast_portrait_ultra
+                        # veo_3_0_r2v_fast -> veo_3_0_r2v_fast_ultra
+                        if "_fl" in model_key:
+                            model_key = model_key.replace("_fl", "_ultra_fl")
+                        else:
+                            # 直接在末尾添加 _ultra
+                            model_key = model_key + "_ultra"
+                        
+                        if stream:
+                            yield self._create_stream_chunk(f"TIER_TWO 账号自动切换到 ultra 模型: {model_key}\n")
+                        debug_logger.log_info(f"[VIDEO] TIER_TWO 账号，模型自动调整: {model_config['model_key']} -> {model_key}")
 
-            # TIER_TWO 账号需要使用 ultra 版本的模型
-            if user_tier == "PAYGATE_TIER_TWO":
-                # 如果模型 key 不包含 ultra，自动添加
-                if "ultra" not in model_key:
-                    # veo_3_1_i2v_s_fast_fl -> veo_3_1_i2v_s_fast_ultra_fl
-                    # veo_3_1_i2v_s_fast_portrait_fl -> veo_3_1_i2v_s_fast_portrait_ultra_fl
-                    # veo_3_1_t2v_fast -> veo_3_1_t2v_fast_ultra
-                    # veo_3_1_t2v_fast_portrait -> veo_3_1_t2v_fast_portrait_ultra
-                    # veo_3_0_r2v_fast -> veo_3_0_r2v_fast_ultra
-                    if "_fl" in model_key:
-                        model_key = model_key.replace("_fl", "_ultra_fl")
-                    else:
-                        # 直接在末尾添加 _ultra
-                        model_key = model_key + "_ultra"
-                    
-                    if stream:
-                        yield self._create_stream_chunk(f"TIER_TWO 账号自动切换到 ultra 模型: {model_key}\n")
-                    debug_logger.log_info(f"[VIDEO] TIER_TWO 账号，模型自动调整: {model_config['model_key']} -> {model_key}")
-
-            # TIER_ONE 账号需要使用非 ultra 版本
-            elif user_tier == "PAYGATE_TIER_ONE":
-                # 如果模型 key 包含 ultra，需要移除（避免用户误用）
-                if "ultra" in model_key:
-                    # veo_3_1_i2v_s_fast_ultra_fl -> veo_3_1_i2v_s_fast_fl
-                    # veo_3_1_t2v_fast_ultra -> veo_3_1_t2v_fast
-                    model_key = model_key.replace("_ultra_fl", "_fl").replace("_ultra", "")
-                    
-                    if stream:
-                        yield self._create_stream_chunk(f"TIER_ONE 账号自动切换到标准模型: {model_key}\n")
-                    debug_logger.log_info(f"[VIDEO] TIER_ONE 账号，模型自动调整: {model_config['model_key']} -> {model_key}")
+                # TIER_ONE 账号需要使用非 ultra 版本
+                elif user_tier == "PAYGATE_TIER_ONE":
+                    # 如果模型 key 包含 ultra，需要移除（避免用户误用）
+                    if "ultra" in model_key:
+                        # veo_3_1_i2v_s_fast_ultra_fl -> veo_3_1_i2v_s_fast_fl
+                        # veo_3_1_t2v_fast_ultra -> veo_3_1_t2v_fast
+                        model_key = model_key.replace("_ultra_fl", "_fl").replace("_ultra", "")
+                        
+                        if stream:
+                            yield self._create_stream_chunk(f"TIER_ONE 账号自动切换到标准模型: {model_key}\n")
+                        debug_logger.log_info(f"[VIDEO] TIER_ONE 账号，模型自动调整: {model_config['model_key']} -> {model_key}")
 
             # 更新 model_config 中的 model_key
             model_config = dict(model_config)  # 创建副本避免修改原配置
@@ -1165,7 +1181,7 @@ class GenerationHandler:
                         aspect_ratio=model_config["aspect_ratio"],
                         start_media_id=start_media_id,
                         end_media_id=end_media_id,
-                        user_paygate_tier=token.user_paygate_tier or "PAYGATE_TIER_ONE"
+                        user_paygate_tier=user_tier
                     )
                 else:
                     # 只有首帧 - 需要将 model_key 中的 _fl_ 替换为 _
@@ -1180,7 +1196,7 @@ class GenerationHandler:
                         model_key=actual_model_key,
                         aspect_ratio=model_config["aspect_ratio"],
                         start_media_id=start_media_id,
-                        user_paygate_tier=token.user_paygate_tier or "PAYGATE_TIER_ONE"
+                        user_paygate_tier=user_tier
                     )
 
             # R2V: 多图生成
@@ -1192,7 +1208,7 @@ class GenerationHandler:
                     model_key=model_config["model_key"],
                     aspect_ratio=model_config["aspect_ratio"],
                     reference_images=reference_images,
-                    user_paygate_tier=token.user_paygate_tier or "PAYGATE_TIER_ONE"
+                    user_paygate_tier=user_tier
                 )
 
             # Extend: 视频延长
@@ -1231,7 +1247,7 @@ class GenerationHandler:
                     end_frame_index=end_frame,
                     aspect_ratio=model_config["aspect_ratio"],
                     model_key=model_config["model_key"],
-                    user_paygate_tier=token.user_paygate_tier or "PAYGATE_TIER_ONE"
+                    user_paygate_tier=user_tier
                 )
 
             # T2V 或 R2V无图: 纯文本生成
@@ -1242,7 +1258,7 @@ class GenerationHandler:
                     prompt=prompt,
                     model_key=model_config["model_key"],
                     aspect_ratio=model_config["aspect_ratio"],
-                    user_paygate_tier=token.user_paygate_tier or "PAYGATE_TIER_ONE"
+                    user_paygate_tier=user_tier
                 )
 
             # 获取task_id和operations

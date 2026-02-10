@@ -191,3 +191,5 @@ class ChatCompletionRequest(BaseModel):
     # Flow2API specific parameters
     image: Optional[str] = None  # Base64 encoded image (deprecated, use messages)
     video: Optional[str] = None  # Base64 encoded video (deprecated)
+    # Tier/model override options
+    user_tier: Optional[str] = None  # Override user tier: PAYGATE_TIER_ONE, PAYGATE_TIER_TWO, PAYGATE_TIER_NOT_PAID
